@@ -136,6 +136,49 @@ void update_all_stats(const Position& pos,
 
 }  // namespace
 
+// ---------------- Bayesian ProbCut helpers (deterministic) ------------------
+namespace {
+
+// Gate threshold: attempt ProbCut verification only if posterior success
+// probability >= 0.92 (92%).
+constexpr double kBayesProbCutPStar = 0.92;
+
+// Approximate shallow-search noise (centipawns) by reduced depth.
+// Conservative defaults; can be tuned later.
+constexpr int kSigmaByDepth[32] = {640, 520, 420, 340, 300, 270, 245, 230, 215, 205, 198,
+                                   192, 187, 183, 180, 177, 175, 173, 171, 170, 170, 170,
+                                   170, 170, 170, 170, 170, 170, 170, 170, 170, 170};
+
+inline double normal_tail_ge(double mu, double thr, int sigmaCp) {
+    const double s = std::max(1, sigmaCp);
+    const double z = (mu - thr) / s;
+    return 0.5 * std::erfc(-z / std::sqrt(2.0));
+}
+
+// Decide whether to *attempt* ProbCut verification for a capture.
+// This never returns a cutoff; it only skips low-probability candidates.
+inline bool bayes_probcut_gate(Value staticEval,
+                               Value probCutBeta,
+                               Depth probCutDepth,
+                               bool  ttLowerBoundStrong,
+                               int   captHist,
+                               Value capturedPieceValue) {
+    // Quick one-step mean in centipawns (pre-move):
+    // static + 0.8*captured_piece_value + small history lift
+    const double mu =
+      double(staticEval) + 0.8 * double(capturedPieceValue) + double(captHist) / 16.0;
+
+    const int d     = std::clamp<int>(int(probCutDepth), 0, 31);
+    const int sigma = kSigmaByDepth[d] - (ttLowerBoundStrong ? 40 : 0);
+
+    const double p = normal_tail_ge(mu, double(probCutBeta), sigma);
+    return p >= kBayesProbCutPStar;
+}
+
+}  // anonymous
+// ---------------------------------------------------------------------------
+
+
 Search::Worker::Worker(SharedState&                    sharedState,
                        std::unique_ptr<ISearchManager> sm,
                        size_t                          threadId,
@@ -931,6 +974,24 @@ Value Search::Worker::search(
                 continue;
 
             assert(pos.capture_stage(move));
+
+            // --- Bayesian ProbCut gate: skip very low-probability candidates ---
+            // Uses only pre-move information; never prunes by itself.
+            {
+                Piece movedPieceLocal  = pos.moved_piece(move);
+                Piece capturedPiecePre = pos.piece_on(move.to_sq());
+                int   captHistScore =
+                  captureHistory[movedPieceLocal][move.to_sq()][type_of(capturedPiecePre)];
+
+                const bool ttLowerBoundStrong = (ttData.bound & BOUND_LOWER)
+                                             && ttData.depth >= depth - 4 && is_valid(ttData.value);
+
+                if (!bayes_probcut_gate(ss->staticEval, probCutBeta, probCutDepth,
+                                        ttLowerBoundStrong, captHistScore,
+                                        PieceValue[capturedPiecePre]))
+                    continue;
+            }
+            // -------------------------------------------------------------------
 
             do_move(pos, move, st, ss);
 
