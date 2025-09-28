@@ -136,18 +136,59 @@ void update_all_stats(const Position& pos,
 
 }  // namespace
 
-// ---------------- Bayesian ProbCut helpers (deterministic) ------------------
+// ---------------- Bayesian ProbCut helpers (tunable via UCI) ---------------
 namespace {
 
-// Gate threshold: attempt ProbCut verification only if posterior success
-// probability >= 0.92 (92%).
-constexpr double kBayesProbCutPStar = 0.92;
+struct BayesConfig {
+    bool   enabled;
+    double pstar;  // 0.0–1.0 (from permille UCI)
+    int    capWeightPct, histScaleDiv, muBiasCp;
+    int    sigmaD0, sigmaD3, sigmaD5, sigmaD8, sigmaD12, sigmaD20, sigmaScalePct, ttBoostCp;
+    int    gateMinDepth, probCutBase, probCutImprove, dynRedDiv;
+};
 
-// Approximate shallow-search noise (centipawns) by reduced depth.
-// Conservative defaults; can be tuned later.
-constexpr int kSigmaByDepth[32] = {640, 520, 420, 340, 300, 270, 245, 230, 215, 205, 198,
-                                   192, 187, 183, 180, 177, 175, 173, 171, 170, 170, 170,
-                                   170, 170, 170, 170, 170, 170, 170, 170, 170, 170};
+inline BayesConfig load_bayes_config(const OptionsMap& o) {
+    BayesConfig c;
+    c.enabled      = int(o["BayesEnabled"]);
+    c.pstar        = int(o["BayesPStarPermille"]) / 1000.0;
+    c.capWeightPct = int(o["BayesCapWeightPct"]);
+    c.histScaleDiv = std::max(1, int(o["BayesHistScaleDiv"]));
+    c.muBiasCp     = int(o["BayesMuBiasCp"]);
+
+    c.sigmaD0       = int(o["BayesSigmaD0Cp"]);
+    c.sigmaD3       = int(o["BayesSigmaD3Cp"]);
+    c.sigmaD5       = int(o["BayesSigmaD5Cp"]);
+    c.sigmaD8       = int(o["BayesSigmaD8Cp"]);
+    c.sigmaD12      = int(o["BayesSigmaD12Cp"]);
+    c.sigmaD20      = int(o["BayesSigmaD20Cp"]);
+    c.sigmaScalePct = int(o["BayesSigmaScalePct"]);
+    c.ttBoostCp     = int(o["BayesTTBoostCp"]);
+
+    c.gateMinDepth   = int(o["BayesGateMinDepth"]);
+    c.probCutBase    = int(o["BayesProbCutBetaBaseCp"]);
+    c.probCutImprove = int(o["BayesProbCutBetaImproveCp"]);
+    c.dynRedDiv      = std::max(1, int(o["BayesDynRedDiv"]));
+    return c;
+}
+
+inline int sigma_by_depth_linear(int d, const BayesConfig& c) {
+    // Piecewise-linear interpolation between anchors at depths {0,3,5,8,12,20}, then scaled.
+    auto lerp = [](int x0, int y0, int x1, int y1, int x) {
+        if (x <= x0)
+            return y0;
+        if (x >= x1)
+            return y1;
+        return y0 + (y1 - y0) * (x - x0) / std::max(1, x1 - x0);
+    };
+    int base = d <= 0  ? c.sigmaD0
+             : d <= 3  ? lerp(0, c.sigmaD0, 3, c.sigmaD3, d)
+             : d <= 5  ? lerp(3, c.sigmaD3, 5, c.sigmaD5, d)
+             : d <= 8  ? lerp(5, c.sigmaD5, 8, c.sigmaD8, d)
+             : d <= 12 ? lerp(8, c.sigmaD8, 12, c.sigmaD12, d)
+             : d <= 20 ? lerp(12, c.sigmaD12, 20, c.sigmaD20, d)
+                       : c.sigmaD20;
+    return base * c.sigmaScalePct / 100;
+}
 
 inline double normal_tail_ge(double mu, double thr, int sigmaCp) {
     const double s = std::max(1, sigmaCp);
@@ -157,22 +198,24 @@ inline double normal_tail_ge(double mu, double thr, int sigmaCp) {
 
 // Decide whether to *attempt* ProbCut verification for a capture.
 // This never returns a cutoff; it only skips low-probability candidates.
-inline bool bayes_probcut_gate(Value staticEval,
-                               Value probCutBeta,
-                               Depth probCutDepth,
-                               bool  ttLowerBoundStrong,
-                               int   captHist,
-                               Value capturedPieceValue) {
-    // Quick one-step mean in centipawns (pre-move):
-    // static + 0.8*captured_piece_value + small history lift
-    const double mu =
-      double(staticEval) + 0.8 * double(capturedPieceValue) + double(captHist) / 16.0;
+inline bool bayes_probcut_gate(Value              staticEval,
+                               Value              probCutBeta,
+                               Depth              probCutDepth,
+                               bool               ttLowerBoundStrong,
+                               int                captHist,
+                               Value              capturedPieceValue,
+                               const BayesConfig& B) {
+    // mu = staticEval + (CapWeightPct/100)*captured_piece_value + captHist/HistScaleDiv + MuBiasCp
+    const double mu = double(staticEval) + (B.capWeightPct / 100.0) * double(capturedPieceValue)
+                    + double(captHist) / double(B.histScaleDiv) + double(B.muBiasCp);
 
-    const int d     = std::clamp<int>(int(probCutDepth), 0, 31);
-    const int sigma = kSigmaByDepth[d] - (ttLowerBoundStrong ? 40 : 0);
+    const int d     = std::max(0, std::min<int>(int(probCutDepth), 31));
+    int       sigma = sigma_by_depth_linear(d, B);
+    if (ttLowerBoundStrong)
+        sigma = std::max(1, sigma - B.ttBoostCp);
 
-    const double p = normal_tail_ge(mu, double(probCutBeta), sigma);
-    return p >= kBayesProbCutPStar;
+    const double p = normal_tail_ge(mu, double(probCutBeta), std::max(1, sigma));
+    return p >= B.pstar;
 }
 
 }  // anonymous
@@ -953,7 +996,10 @@ Value Search::Worker::search(
     // Step 11. ProbCut
     // If we have a good enough capture (or queen promotion) and a reduced search
     // returns a value much above beta, we can (almost) safely prune the previous move.
-    probCutBeta = beta + 224 - 64 * improving;
+    const BayesConfig B = load_bayes_config(options);
+    probCutBeta =
+      beta + (B.enabled ? (B.probCutBase - B.probCutImprove * improving) : (224 - 64 * improving));
+
     if (depth >= 3
         && !is_decisive(beta)
         // If value from transposition table is lower than probCutBeta, don't attempt
@@ -963,8 +1009,10 @@ Value Search::Worker::search(
         assert(probCutBeta < VALUE_INFINITE && probCutBeta > beta);
 
         MovePicker mp(pos, ttData.move, probCutBeta - ss->staticEval, &captureHistory);
-        Depth      dynamicReduction = std::max((ss->staticEval - beta) / 306, -1);
-        Depth      probCutDepth     = std::max(depth - 5 - dynamicReduction, 0);
+        Depth      dynamicReduction =
+          std::max((ss->staticEval - beta) / (B.enabled ? B.dynRedDiv : 306), -1);
+
+        Depth probCutDepth = std::max(depth - 5 - dynamicReduction, 0);
 
         while ((move = mp.next_move()) != Move::none())
         {
@@ -974,9 +1022,8 @@ Value Search::Worker::search(
                 continue;
 
             assert(pos.capture_stage(move));
-
-            // --- Bayesian ProbCut gate: skip very low-probability candidates ---
-            // Uses only pre-move information; never prunes by itself.
+            // --- Bayesian ProbCut gate (tunable via UCI) ---
+            if (B.enabled && probCutDepth >= B.gateMinDepth)
             {
                 Piece movedPieceLocal  = pos.moved_piece(move);
                 Piece capturedPiecePre = pos.piece_on(move.to_sq());
@@ -988,10 +1035,10 @@ Value Search::Worker::search(
 
                 if (!bayes_probcut_gate(ss->staticEval, probCutBeta, probCutDepth,
                                         ttLowerBoundStrong, captHistScore,
-                                        PieceValue[capturedPiecePre]))
+                                        PieceValue[capturedPiecePre], B))
                     continue;
             }
-            // -------------------------------------------------------------------
+            // ------------------------------------------------
 
             do_move(pos, move, st, ss);
 

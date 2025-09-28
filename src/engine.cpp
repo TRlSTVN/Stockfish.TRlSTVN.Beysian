@@ -116,6 +116,43 @@ Engine::Engine(std::optional<std::string> path) :
 
     options.add("UCI_ShowWDL", Option(false));
 
+    // --- Bayesian ProbCut tuning options (UCI) ------------------------------
+    // Master on/off
+    options.add("BayesEnabled", Option(true));
+
+    // Gate probability threshold P* in permille (e.g., 920 => 0.92)
+    options.add("BayesPStarPermille", Option(920, 500, 999));
+
+    // Mean model:
+    // mu = staticEval + CapWeightPct/100 * capturedPieceValue
+    //      + captHist/HistScaleDiv + MuBiasCp
+    options.add("BayesCapWeightPct", Option(80, 0, 200));  // %
+    options.add("BayesHistScaleDiv", Option(16, 1, 64));   // divisor
+    options.add("BayesMuBiasCp", Option(0, -400, 400));    // cp
+
+    // Sigma model: piecewise-linear anchors by reduced depth,
+    // then scaled by SigmaScalePct (%). Anchors at {0,3,5,8,12,20}.
+    options.add("BayesSigmaD0Cp", Option(640, 200, 1600));
+    options.add("BayesSigmaD3Cp", Option(340, 150, 1200));
+    options.add("BayesSigmaD5Cp", Option(270, 120, 1000));
+    options.add("BayesSigmaD8Cp", Option(215, 100, 800));
+    options.add("BayesSigmaD12Cp", Option(187, 80, 700));
+    options.add("BayesSigmaD20Cp", Option(170, 70, 600));
+    options.add("BayesSigmaScalePct", Option(100, 50, 200));  // %
+
+    options.add("BayesTTBoostCp", Option(40, 0, 200));  // subtract from sigma if TT LB strong
+
+    // Activation and probCutBeta composition
+    options.add("BayesGateMinDepth", Option(3, 0, 8));           // min reduced depth to consider
+    options.add("BayesProbCutBetaBaseCp", Option(224, 0, 512));  // beta + base - improve*improving
+    options.add("BayesProbCutBetaImproveCp", Option(64, 0, 128));
+
+    // Step‑11 dynamic reduction divisor (was 306):
+    // dynamicReduction = max((staticEval - beta)/Div, -1)
+    options.add("BayesDynRedDiv", Option(306, 80, 800));
+    // -----------------------------------------------------------------------
+
+
     options.add(  //
       "SyzygyPath", Option("", [](const Option& o) {
           Tablebases::init(o);
