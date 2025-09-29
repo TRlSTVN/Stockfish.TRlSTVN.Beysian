@@ -147,6 +147,16 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("BayesProbCutBetaBaseCp", Option(224, 0, 512));  // beta + base - improve*improving
     options.add("BayesProbCutBetaImproveCp", Option(64, 0, 128));
 
+    // Depth offset for ProbCut reduced search: probCutDepth = max(depth - offset - dynRed, 0)
+    options.add("BayesProbCutDepthOffset", Option(5, 0, 12));
+
+    // Optional SEE gate before ProbCut (0 = off). If >0, require see_ge(move, -SEEMargin)
+    options.add("BayesSEEMarginCp", Option(0, 0, 400));
+
+    // Replace hardcoded 418cp small-ProbCut margin; 0 = disable that shortcut
+    options.add("BayesSmallProbCutCp", Option(418, 0, 1000));
+
+
     // Step‑11 dynamic reduction divisor (was 306):
     // dynamicReduction = max((staticEval - beta)/Div, -1)
     options.add("BayesDynRedDiv", Option(306, 80, 800));

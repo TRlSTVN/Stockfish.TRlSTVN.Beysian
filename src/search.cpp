@@ -141,10 +141,15 @@ namespace {
 
 struct BayesConfig {
     bool   enabled;
-    double pstar;  // 0.0–1.0 (from permille UCI)
+    double pstar;
     int    capWeightPct, histScaleDiv, muBiasCp;
     int    sigmaD0, sigmaD3, sigmaD5, sigmaD8, sigmaD12, sigmaD20, sigmaScalePct, ttBoostCp;
     int    gateMinDepth, probCutBase, probCutImprove, dynRedDiv;
+
+    // NEW:
+    int probCutDepthOffset;  // replaces hardcoded 5
+    int seeMarginCp;         // 0 disables SEE gate
+    int smallProbCutCp;      // 0 disables small-ProbCut shortcut
 };
 
 inline BayesConfig load_bayes_config(const OptionsMap& o) {
@@ -168,8 +173,14 @@ inline BayesConfig load_bayes_config(const OptionsMap& o) {
     c.probCutBase    = int(o["BayesProbCutBetaBaseCp"]);
     c.probCutImprove = int(o["BayesProbCutBetaImproveCp"]);
     c.dynRedDiv      = std::max(1, int(o["BayesDynRedDiv"]));
+
+    // NEW:
+    c.probCutDepthOffset = int(o["BayesProbCutDepthOffset"]);
+    c.seeMarginCp        = int(o["BayesSEEMarginCp"]);
+    c.smallProbCutCp     = int(o["BayesSmallProbCutCp"]);
     return c;
 }
+
 
 inline int sigma_by_depth_linear(int d, const BayesConfig& c) {
     // Piecewise-linear interpolation between anchors at depths {0,3,5,8,12,20}, then scaled.
@@ -668,6 +679,10 @@ Value Search::Worker::search(
     constexpr bool rootNode = nodeType == Root;
     const bool     allNode  = !(PvNode || cutNode);
 
+    // ---- Add this line here (before any possible 'goto moves_loop') ----
+    const BayesConfig B = load_bayes_config(options);
+    // --------------------------------------------------------------------
+
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)
     {
@@ -996,7 +1011,6 @@ Value Search::Worker::search(
     // Step 11. ProbCut
     // If we have a good enough capture (or queen promotion) and a reduced search
     // returns a value much above beta, we can (almost) safely prune the previous move.
-    const BayesConfig B = load_bayes_config(options);
     probCutBeta =
       beta + (B.enabled ? (B.probCutBase - B.probCutImprove * improving) : (224 - 64 * improving));
 
@@ -1009,10 +1023,11 @@ Value Search::Worker::search(
         assert(probCutBeta < VALUE_INFINITE && probCutBeta > beta);
 
         MovePicker mp(pos, ttData.move, probCutBeta - ss->staticEval, &captureHistory);
-        Depth      dynamicReduction =
-          std::max((ss->staticEval - beta) / (B.enabled ? B.dynRedDiv : 306), -1);
 
-        Depth probCutDepth = std::max(depth - 5 - dynamicReduction, 0);
+        Depth dynamicReduction =
+          std::max((ss->staticEval - beta) / (B.enabled ? B.dynRedDiv : 306), -1);
+        Depth probCutDepth = std::max(depth - B.probCutDepthOffset - dynamicReduction, 0);
+
 
         while ((move = mp.next_move()) != Move::none())
         {
@@ -1039,6 +1054,9 @@ Value Search::Worker::search(
                     continue;
             }
             // ------------------------------------------------
+            // Optional SEE gate for ProbCut candidates
+            if (B.seeMarginCp > 0 && !pos.see_ge(move, -B.seeMarginCp))
+                continue;
 
             do_move(pos, move, st, ss);
 
@@ -1066,11 +1084,14 @@ Value Search::Worker::search(
 
 moves_loop:  // When in check, search starts here
 
-    // Step 12. A small Probcut idea
-    probCutBeta = beta + 418;
-    if ((ttData.bound & BOUND_LOWER) && ttData.depth >= depth - 4 && ttData.value >= probCutBeta
-        && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value))
-        return probCutBeta;
+    if (B.smallProbCutCp > 0)
+    {
+        probCutBeta = beta + B.smallProbCutCp;
+        if ((ttData.bound & BOUND_LOWER) && ttData.depth >= depth - 4 && ttData.value >= probCutBeta
+            && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value))
+            return probCutBeta;
+    }
+
 
     const PieceToHistory* contHist[] = {
       (ss - 1)->continuationHistory, (ss - 2)->continuationHistory, (ss - 3)->continuationHistory,
