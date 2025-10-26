@@ -67,7 +67,6 @@ namespace Stockfish {
 
 
 // Forward declarations needed by Worker::search()/qsearch() before helper definitions (parity with master).
-namespace {
 using SearchedList = ValueList<Move, 32>;
 Value value_to_tt(Value v, int ply);
 Value value_from_tt(Value v, int ply, int r50c);
@@ -84,7 +83,6 @@ void update_all_stats(const Position& pos,
                       SearchedList&   capturesSearched,
                       Depth           depth,
                       Move            ttMove);
-}  // namespace
 
 // Helper: pre-move captured piece (handles EN PASSANT correctly)
 static inline Piece CapturedPiecePre(const Position& pos, Move m) {
