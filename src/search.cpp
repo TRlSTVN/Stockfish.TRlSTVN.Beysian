@@ -2908,7 +2908,6 @@ void update_quiet_histories(
     workerThread.pawnHistory[pIndex][pos.moved_piece(move)][move.to_sq()]
       << (bonus * (bonus > 0 ? 800 : 500) / 1024) + 70;
 }
-}
 
 // When playing with strength handicap, choose the best move among a set of
 // RootMoves using a statistical rule dependent on 'level'. Idea by Heinz van Saanen.
