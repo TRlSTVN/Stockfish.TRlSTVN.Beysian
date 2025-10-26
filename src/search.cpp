@@ -126,13 +126,6 @@ inline int mul_q8_cp_clamped(int zQ8, int sigmaCp) {
     return int(prod);
 }
 // (anonymous namespace removed for linkage consistency)
-
-
-// Keep master helpers available: used by Worker::search() and update_all_stats()
-constexpr int SEARCHEDLIST_CAPACITY = 32;
-using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
-
-
 // ---------------- Bayesian ProbCut helpers (tunable via UCI) ---------------
 struct BayesConfig {
     bool enabled;
@@ -1036,8 +1029,7 @@ void Search::Worker::clear() {
         reductions[i] = int(2809 / 128.0 * std::log(i));
 
     refreshTable.clear(networks[numaAccessToken]);
-    return bestValue;
-}  // end of Search::Worker::search
+}  // end of Search::Worker::clear
 
 // Main search function for both PV and non-PV nodes
 template<NodeType nodeType>
