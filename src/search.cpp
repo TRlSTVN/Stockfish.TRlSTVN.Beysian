@@ -2384,8 +2384,6 @@ moves_loop:  // When in check, search starts here// Step 12. A small ProbCut ide
                 }
 
                 assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
-
-                return bestValue;
             }
 
             return bestValue;
