@@ -68,6 +68,7 @@ namespace Stockfish {
 
 // Forward declarations needed by Worker::search()/qsearch() before helper definitions (parity with master).
 namespace {
+using SearchedList = ValueList<Move, 32>;
 Value value_to_tt(Value v, int ply);
 Value value_from_tt(Value v, int ply, int r50c);
 void  update_pv(Move* pv, Move move, const Move* childPv);
@@ -1249,7 +1250,7 @@ Value Search::Worker::search(
         // Skip early pruning when in check
         ss->staticEval = eval = (ss - 2)->staticEval;
         improving             = false;
-        goto moves_loop;
+        // (goto removed) fallthrough to moves_loop guarded by if (!ss->inCheck)
     }
     else if (excludedMove)
         unadjustedStaticEval = eval = ss->staticEval;

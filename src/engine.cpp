@@ -246,52 +246,8 @@ Engine::Engine(std::optional<std::string> path) :
     // Small ProbCut (Step-12) margin
     options.add("BayesSmallProbCutCp", Option(418, 0, 5000));
     options.add("BayesProfile", Option("off", [this](const Option& o) {
-                    const std::string v    = std::string(o);
-                    auto              seti = [this](const char* k, int x) { this->options[k] = x; };
-                    auto setb = [this](const char* k, bool x) { this->options[k] = x; };
-                    if (v == "off")
-                    {
-                        setb("BayesEnabled", false);
-                        return std::optional<std::string>("Bayes off");
-                    }
-                    setb("BayesEnabled", true);
-                    if (v == "mild")
-                    {
-                        seti("BayesMaxVerifPerNode", 4);
-                        seti("BayesMaxGatedCaptures", 8);
-                        seti("BayesPStarPermille", 900);
-                        seti("BayesTTNearBoostCp", 8);
-                        seti("BayesTTNearCp", 64);
-                        seti("BayesTTLBMinDepth", 6);
-                        seti("BayesSmallProbCutCp", 380);
-                        seti("BayesBBGainQ8", 8);
-                        seti("BayesZMtcStepQ8", 16);
-                    }
-                    else if (v == "std")
-                    {
-                        seti("BayesMaxVerifPerNode", 6);
-                        seti("BayesMaxGatedCaptures", 12);
-                        seti("BayesPStarPermille", 920);
-                        seti("BayesTTNearBoostCp", 16);
-                        seti("BayesTTNearCp", 64);
-                        seti("BayesTTLBMinDepth", 8);
-                        seti("BayesSmallProbCutCp", 418);
-                        seti("BayesBBGainQ8", 12);
-                        seti("BayesZMtcStepQ8", 24);
-                    }
-                    else if (v == "aggressive")
-                    {
-                        seti("BayesMaxVerifPerNode", 8);
-                        seti("BayesMaxGatedCaptures", 16);
-                        seti("BayesPStarPermille", 940);
-                        seti("BayesTTNearBoostCp", 24);
-                        seti("BayesTTNearCp", 96);
-                        seti("BayesTTLBMinDepth", 10);
-                        seti("BayesSmallProbCutCp", 448);
-                        seti("BayesBBGainQ8", 16);
-                        seti("BayesZMtcStepQ8", 32);
-                    }
-                    return std::optional<std::string>("Bayes profile applied: " + v);
+                    return std::optional<std::string>(std::string("BayesProfile=")
+                                                      + std::string(o));
                 }));
     // Depth-aware p* schedule / CDF
 
