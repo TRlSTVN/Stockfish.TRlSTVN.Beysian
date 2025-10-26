@@ -85,9 +85,9 @@ void update_all_stats(const Position& pos,
                       Move            ttMove);
 
 // Prototypes for helpers defined later (silence -Wmissing-declarations)
-int   correction_value(const Worker&, const Position&, const Stack* const);
+int   correction_value(const Search::Worker&, const Position&, const Search::Stack* const);
 Value to_corrected_static_eval(Value, int);
-void  update_correction_history(const Position&, Stack* const, Search::Worker&, int);
+void  update_correction_history(const Position&, Search::Stack* const, Search::Worker&, int);
 Value value_draw(size_t);
 
 // Helper: pre-move captured piece (handles EN PASSANT correctly)
