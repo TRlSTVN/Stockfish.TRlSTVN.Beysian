@@ -3239,3 +3239,5 @@ moves_loop:  // When in check, search starts here// Step 12. A small ProbCut ide
             return pv.size() > 1;
         }
     }  // namespace Stockfish
+}
+}
