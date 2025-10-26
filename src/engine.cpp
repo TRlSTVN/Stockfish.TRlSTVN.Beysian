@@ -140,6 +140,162 @@ Engine::Engine(std::optional<std::string> path) :
           return std::nullopt;
       }));
 
+
+    // --- Bayesian search controls (additive; inert unless BayesEnabled=true) ---
+    options.add("BayesEnabled", Option(false));
+
+
+    options.add("BayesPStarPermille", Option(920, 500, 999));
+    options.add("BayesCDFMode", Option(0, 0, 2));  // 0: normal LUT, 1: logistic, 2: Student-t
+    options.add("BayesTNu", Option(8, 3, 64));     // Student-t degrees of freedom
+
+    // z* biases / rails (Q8)
+    options.add("BayesZTTBiasQ8", Option(0, 0, 2048));
+    options.add("BayesZTTUBiasQ8", Option(0, 0, 2048));
+    options.add("BayesZMidBiasQ8", Option(0, 0, 2048));
+    options.add("BayesZEndBiasQ8", Option(0, 0, 2048));
+    options.add("BayesZPvBiasQ8", Option(0, 0, 2048));
+    options.add("BayesZTTBestBiasQ8", Option(0, 0, 2048));
+    options.add("BayesZImprovingBiasQ8", Option(0, 0, 2048));
+    options.add("BayesZNotImprovingBiasQ8", Option(0, 0, 2048));
+    options.add("BayesZStarMinQ8", Option(0, 0, 2048));
+    options.add("BayesZTightBiasQ8", Option(0, 0, 2048));
+    options.add("BayesTightWindowCp", Option(0, 0, 2000));
+    options.add("BayesTightOnPVOnly", Option(false));
+
+    // μ & history / SEE & class biases (centipawns)
+    options.add("BayesCapWeightPct", Option(50, 0, 200));
+    options.add("BayesHistScaleDiv", Option(64, 1, 2048));
+    options.add("BayesHistCapCp", Option(0, 0, 5000));
+    options.add("BayesMuBiasCp", Option(0, -5000, 5000));
+    options.add("BayesMuPromoBiasCp", Option(0, -5000, 5000));
+    options.add("BayesMuMajorCapBiasCp", Option(0, -5000, 5000));
+    options.add("BayesMuSEEBoostCp", Option(0, 0, 2000));
+    options.add("BayesMuTTAdjDiv", Option(0, 0, 1024));
+    options.add("BayesMuTTAdjCapCp", Option(0, 0, 5000));
+
+    // σ anchors & scales (centipawns)
+    options.add("BayesSigmaD0Cp", Option(200, 1, 2000));
+    options.add("BayesSigmaD3Cp", Option(220, 1, 2000));
+    options.add("BayesSigmaD5Cp", Option(240, 1, 2000));
+    options.add("BayesSigmaD8Cp", Option(260, 1, 2000));
+    options.add("BayesSigmaD12Cp", Option(280, 1, 2000));
+    options.add("BayesSigmaD20Cp", Option(320, 1, 2000));
+    options.add("BayesSigmaScalePct", Option(100, 1, 500));
+    options.add("BayesSigmaMidPct", Option(100, 1, 500));
+    options.add("BayesSigmaEndPct", Option(100, 1, 500));
+    options.add("BayesTTBoostCp", Option(0, 0, 2000));
+    options.add("BayesSigmaFloorCp", Option(0, 0, 5000));
+    options.add("BayesSigmaCeilCp", Option(0, 0, 5000));
+    options.add("BayesSigmaVolThreshCp", Option(0, 0, 5000));
+    options.add("BayesSigmaVolAddCp", Option(0, 0, 2000));
+    options.add("BayesTTNearCp", Option(64, 0, 1024));
+    options.add("BayesTTNearBoostCp", Option(16, 0, 1024));
+
+    // Gate controls & guards
+    options.add("BayesGateMinDepth", Option(4, 0, 64));
+    options.add("BayesSEEMarginCp", Option(0, 0, 2000));
+    options.add("BayesMinCapturedValueCp", Option(0, 0, 2000));
+    options.add("BayesMaxGatedCaptures", Option(0, 0, 32));
+    options.add("BayesMaxVerifPerNode", Option(0, 0, 32));
+    options.add("BayesGateCutOnly", Option(false));
+    options.add("BayesNoGateInCheck", Option(false));
+    options.add("BayesNoGateAtDepth", Option(0, 0, 256));
+    options.add("BayesNoGateRule50", Option(0, 0, 100));
+
+    options.add("BayesPStarShallowPermille", Option(0, 0, 999));
+    options.add("BayesPStarDeepPermille", Option(0, 0, 999));
+    options.add("BayesPStarShallowDepth", Option(4, 0, 31));
+    options.add("BayesPStarDeepDepth", Option(12, 1, 31));
+    options.add("BayesEviMinCp", Option(0, 0, 5000));
+
+    // Beta–Binomial posterior + mixing
+    options.add("BayesBBEnabled", Option(false));
+    options.add("BayesBBAlpha0", Option(1, 1, 10000));
+    options.add("BayesBBBeta0", Option(1, 1, 10000));
+    options.add("BayesBBGainQ8", Option(0, 0, 4096));
+    options.add("BayesBBMaxBiasQ8", Option(0, 0, 4096));
+    options.add("BayesBBMixPermille", Option(1000, 0, 1000));
+    options.add("BayesBBMinTrials", Option(64, 1, 1000000));
+
+    // Quiescence pre-gate (v2)
+    options.add("BayesQSEnabled", Option(false));
+    options.add("BayesQSSigmaCp", Option(0, 0, 5000));
+    options.add("BayesQSZStarQ8", Option(360, 0, 4096));
+    options.add("BayesQSAlphaMarginCp", Option(0, -2000, 2000));
+    // Note: 0 disables QS gating (it does NOT mean unlimited)
+    options.add("BayesQSMaxGatedCaptures", Option(2, 0, 32));
+    options.add("BayesQSMinCapturedValueCp", Option(0, 0, 2000));
+
+    // Multiple-tests correction
+    options.add("BayesZMtcStepQ8", Option(0, 0, 4096));
+    // Note: 0 uses a conservative default cap of 4σ
+    options.add("BayesZMtcMaxQ8", Option(0, 0, 4096));
+
+    // TT LB strong min-depth (absolute)
+    options.add("BayesTTLBMinDepth", Option(8, 0, 64));
+    options.add("BayesQSTTLBMinDepth", Option(0, 0, 99));
+    options.add("BayesTBGuard", Option(true));
+    options.add("BayesDebugCounters", Option(false));
+
+    // Step-11 ProbCut tunables (defaults match master)
+    options.add("BayesProbCutBetaBaseCp", Option(224, 0, 2000));
+    options.add("BayesProbCutBetaImproveCp", Option(64, 0, 1000));
+    options.add("BayesProbCutDepthOffset", Option(5, 0, 32));
+
+    // Small ProbCut (Step-12) margin
+    options.add("BayesSmallProbCutCp", Option(418, 0, 5000));
+    options.add("BayesProfile", Option("off", [this](const Option& o) {
+                    const std::string v    = std::string(o);
+                    auto              seti = [this](const char* k, int x) { this->options[k] = x; };
+                    auto setb = [this](const char* k, bool x) { this->options[k] = x; };
+                    if (v == "off")
+                    {
+                        setb("BayesEnabled", false);
+                        return std::optional<std::string>("Bayes off");
+                    }
+                    setb("BayesEnabled", true);
+                    if (v == "mild")
+                    {
+                        seti("BayesMaxVerifPerNode", 4);
+                        seti("BayesMaxGatedCaptures", 8);
+                        seti("BayesPStarPermille", 900);
+                        seti("BayesTTNearBoostCp", 8);
+                        seti("BayesTTNearCp", 64);
+                        seti("BayesTTLBMinDepth", 6);
+                        seti("BayesSmallProbCutCp", 380);
+                        seti("BayesBBGainQ8", 8);
+                        seti("BayesZMtcStepQ8", 16);
+                    }
+                    else if (v == "std")
+                    {
+                        seti("BayesMaxVerifPerNode", 6);
+                        seti("BayesMaxGatedCaptures", 12);
+                        seti("BayesPStarPermille", 920);
+                        seti("BayesTTNearBoostCp", 16);
+                        seti("BayesTTNearCp", 64);
+                        seti("BayesTTLBMinDepth", 8);
+                        seti("BayesSmallProbCutCp", 418);
+                        seti("BayesBBGainQ8", 12);
+                        seti("BayesZMtcStepQ8", 24);
+                    }
+                    else if (v == "aggressive")
+                    {
+                        seti("BayesMaxVerifPerNode", 8);
+                        seti("BayesMaxGatedCaptures", 16);
+                        seti("BayesPStarPermille", 940);
+                        seti("BayesTTNearBoostCp", 24);
+                        seti("BayesTTNearCp", 96);
+                        seti("BayesTTLBMinDepth", 10);
+                        seti("BayesSmallProbCutCp", 448);
+                        seti("BayesBBGainQ8", 16);
+                        seti("BayesZMtcStepQ8", 32);
+                    }
+                    return std::optional<std::string>("Bayes profile applied: " + v);
+                }));
+    // Depth-aware p* schedule / CDF
+
+
     load_networks();
     resize_threads();
 }
