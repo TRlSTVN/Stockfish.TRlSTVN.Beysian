@@ -1322,8 +1322,12 @@ Value Search::Worker::search(
     }
 
     // Step 9. Null move search with verification search
-    if (cutNode && ss->staticEval >= beta - 18 * depth + 390 && !excludedMove
-        && pos.non_pawn_material(us) && ss->ply >= nmpMinPly && !is_loss(beta))
+    if (!PvNode          // never at PV nodes
+        && !ss->inCheck  // never when side to move is in check
+        && cutNode && ss->staticEval >= beta - 18 * depth + 390 && !excludedMove
+        && pos.non_pawn_material(us)
+        && (ss - 1)->currentMove != Move::null()  // no two nulls in a row
+        && ss->ply >= nmpMinPly && !is_loss(beta))
     {
         assert((ss - 1)->currentMove != Move::null());
 
