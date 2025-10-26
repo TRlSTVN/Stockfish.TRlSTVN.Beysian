@@ -84,6 +84,12 @@ void update_all_stats(const Position& pos,
                       Depth           depth,
                       Move            ttMove);
 
+// Prototypes for helpers defined later (silence -Wmissing-declarations)
+int   correction_value(const Worker&, const Position&, const Stack* const);
+Value to_corrected_static_eval(Value, int);
+void  update_correction_history(const Position&, Stack* const, Search::Worker&, int);
+Value value_draw(size_t);
+
 // Helper: pre-move captured piece (handles EN PASSANT correctly)
 static inline Piece CapturedPiecePre(const Position& pos, Move m) {
     Piece p = pos.piece_on(m.to_sq());
@@ -2379,6 +2385,7 @@ Value Search::Worker::search(
 
         return bestValue;
     }
+    return VALUE_ZERO;
 }  // end of Search::Worker::search
 
 // Quiescence search function, which is called by the main search function with
