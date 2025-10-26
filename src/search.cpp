@@ -186,7 +186,7 @@ struct BayesConfig {
 
 inline BayesConfig load_bayes_config(const OptionsMap& o) {
     // Non-inserting getter to avoid creating phantom UCI options (and races)
-    auto        get = [&](const char* k, int def = 0) { return int(o[k] ? o[k] : def); };
+    auto        get = [&](const char* k, int def = 0) -> int { return int(o[k]); };
     BayesConfig B{};
     B.enabled       = get("BayesEnabled", 0);
     B.tbGuard       = get("BayesTBGuard", 1);
@@ -469,8 +469,9 @@ inline bool bayes_probcut_gate(Value              staticEval,
             return false;
     }
     // Compute in 64-bit then clamp, to be robust under aggressive compilation.
-    const long long diffQ8ll = (long long(muCp) - long long(int(probCutBeta))) * 256LL;
-    const int       diffQ8   = int(std::clamp(diffQ8ll, -1LL * Q8_RAIL, 1LL * Q8_RAIL));
+    const long long diffQ8ll =
+      (static_cast<long long>(muCp) - static_cast<long long>(int(probCutBeta))) * 256LL;
+    const int diffQ8 = int(std::clamp(diffQ8ll, -1LL * Q8_RAIL, 1LL * Q8_RAIL));
     // Compare to (z*·σ) in Q8·cp units
     return diffQ8 >= thrQ8Node;
 }

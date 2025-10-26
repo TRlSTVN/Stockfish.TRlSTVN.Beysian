@@ -247,9 +247,8 @@ Engine::Engine(std::optional<std::string> path) :
     options.add("BayesSmallProbCutCp", Option(418, 0, 5000));
     options.add("BayesProfile", Option("off", [this](const Option& o) {
                     const std::string v    = std::string(o);
-                    auto&             opts = const_cast<OptionsMap&>(this->options);
-                    auto              seti = [&opts](const char* k, int x) { opts[k] = x; };
-                    auto              setb = [&opts](const char* k, bool x) { opts[k] = x; };
+                    auto              seti = [this](const char* k, int x) { this->options[k] = x; };
+                    auto setb = [this](const char* k, bool x) { this->options[k] = x; };
                     if (v == "off")
                     {
                         setb("BayesEnabled", false);
