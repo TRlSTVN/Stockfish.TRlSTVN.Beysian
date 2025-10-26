@@ -180,7 +180,8 @@ struct BayesConfig {
 
 inline BayesConfig load_bayes_config(const OptionsMap& o) {
     // Non-inserting getter to avoid creating phantom UCI options (and races)
-    auto        get = [&](const char* k, int def = 0) -> int { return int(o[k]); };
+    auto get = [&](const char* k, int /*def*/ = 0) -> int { return int(o[k]); };
+
     BayesConfig B{};
     B.enabled       = get("BayesEnabled", 0);
     B.tbGuard       = get("BayesTBGuard", 1);
@@ -1860,7 +1861,6 @@ Value Search::Worker::search(
                     }
                 }
             }  // end: skip ProbCut when in check
-moves_loop:  // When in check, search starts here// Step 12. A small ProbCut idea (master behavior). Run only when Bayes is disabled
             if (!g_bayesCfg.enabled)
             {
 
@@ -3238,5 +3238,3 @@ moves_loop:  // When in check, search starts here// Step 12. A small ProbCut ide
             return pv.size() > 1;
         }
     }  // namespace Stockfish
-}
-}
