@@ -71,11 +71,11 @@ namespace {
 Value value_to_tt(Value v, int ply);
 Value value_from_tt(Value v, int ply, int r50c);
 void  update_pv(Move* pv, Move move, const Move* childPv);
-void  update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus);
+void  update_continuation_histories(Search::Stack* ss, Piece pc, Square to, int bonus);
 void  update_quiet_histories(
-   const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus);
+   const Position& pos, Search::Stack* ss, Search::Worker& workerThread, Move move, int bonus);
 void update_all_stats(const Position& pos,
-                      Stack*          ss,
+                      Search::Stack*  ss,
                       Search::Worker& workerThread,
                       Move            bestMove,
                       Square          prevSq,
@@ -87,8 +87,8 @@ void update_all_stats(const Position& pos,
 
 // Helper: pre-move captured piece (handles EN PASSANT correctly)
 static inline Piece CapturedPiecePre(const Position& pos, Move m) {
-    Piece p = pos.piece_on(to_sq(m));
-    if (m.type_of() == ENPASSANT)
+    Piece p = pos.piece_on(m.to_sq());
+    if (m.type_of() == EN_PASSANT)
         p = make_piece(~pos.side_to_move(), PAWN);
     return p;
 }
@@ -186,10 +186,7 @@ struct BayesConfig {
 
 inline BayesConfig load_bayes_config(const OptionsMap& o) {
     // Non-inserting getter to avoid creating phantom UCI options (and races)
-    auto get = [&](const char* k, int def = 0) {
-        auto it = o.find(k);
-        return it != o.end() ? int(it->second) : def;
-    };
+    auto        get = [&](const char* k, int def = 0) { return int(o[k] ? o[k] : def); };
     BayesConfig B{};
     B.enabled       = get("BayesEnabled", 0);
     B.tbGuard       = get("BayesTBGuard", 1);
@@ -570,8 +567,7 @@ void Search::Worker::start_searching() {
     // --- Build (or clear) Bayesian tables once per search (deterministic) ---
     // Always re-initialize per-thread config and counters to avoid stale state
     // when BayesEnabled is toggled between searches in the same thread.
-    const auto itBayesEnabled = options.find("BayesEnabled");
-    const bool wantBayes      = (itBayesEnabled != options.end()) && int(itBayesEnabled->second);
+    const bool wantBayes = int(options["BayesEnabled"]) != 0;
 
     g_bayesCfg = BayesConfig{};  // clear any previous fields
     if (wantBayes)
@@ -1700,7 +1696,7 @@ Value Search::Worker::search(
                             if (B.minCapturedValueCp > 0)
                             {
                                 Piece capPreMin = CapturedPiecePre(pos, move);
-                                if (move.type_of() == ENPASSANT)
+                                if (move.type_of() == EN_PASSANT)
                                     capPreMin = make_piece(~pos.side_to_move(), PAWN);
                                 if (capPreMin == NO_PIECE
                                     || PieceValue[capPreMin] < B.minCapturedValueCp)
@@ -1729,7 +1725,7 @@ Value Search::Worker::search(
                                 Piece movedPieceLocal  = pos.moved_piece(move);
                                 Piece capturedPiecePre = CapturedPiecePre(pos, move);
                                 if (move.type_of()
-                                    == ENPASSANT)  // pre-move EP fix: captured pawn is behind 'to'
+                                    == EN_PASSANT)  // pre-move EP fix: captured pawn is behind 'to'
                                     capturedPiecePre = make_piece(~pos.side_to_move(), PAWN);
 
                                 // Capture-history term only if there is a captured piece (matches master style)
@@ -2646,7 +2642,7 @@ moves_loop:  // When in check, search starts here// Step 12. A small ProbCut ide
                     && (Bqs.qsMaxGatedCaptures != 0 && qsGated < Bqs.qsMaxGatedCaptures))
                 {
                     Piece capPre = CapturedPiecePre(pos, move);
-                    if (move.type_of() == ENPASSANT)
+                    if (move.type_of() == EN_PASSANT)
                         capPre = make_piece(~pos.side_to_move(), PAWN);
                     if (!(Bqs.qsMinCapturedValueCp > 0
                           && PieceValue[capPre] < Bqs.qsMinCapturedValueCp))
@@ -2850,7 +2846,7 @@ moves_loop:  // When in check, search starts here// Step 12. A small ProbCut ide
 
         // Updates stats at the end of search() when a bestMove is found
         void update_all_stats(const Position& pos,
-                              Stack*          ss,
+                              Search::Stack*  ss,
                               Search::Worker& workerThread,
                               Move            bestMove,
                               Square          prevSq,
@@ -2902,7 +2898,7 @@ moves_loop:  // When in check, search starts here// Step 12. A small ProbCut ide
 
         // Updates histories of the move pairs formed by moves
         // at ply -1, -2, -3, -4, and -6 with current move.
-        void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
+        void update_continuation_histories(Search::Stack* ss, Piece pc, Square to, int bonus) {
             static constexpr std::array<ConthistBonus, 6> conthist_bonuses = {
               {{1, 1157}, {2, 648}, {3, 288}, {4, 576}, {5, 140}, {6, 441}}};
 
@@ -2919,8 +2915,11 @@ moves_loop:  // When in check, search starts here// Step 12. A small ProbCut ide
 
         // Updates move sorting heuristics
 
-        void update_quiet_histories(
-          const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus) {
+        void update_quiet_histories(const Position& pos,
+                                    Search::Stack*  ss,
+                                    Search::Worker& workerThread,
+                                    Move            move,
+                                    int             bonus) {
 
             Color us = pos.side_to_move();
             workerThread.mainHistory[us][move.from_to()]
