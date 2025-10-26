@@ -1036,8 +1036,8 @@ void Search::Worker::clear() {
         reductions[i] = int(2809 / 128.0 * std::log(i));
 
     refreshTable.clear(networks[numaAccessToken]);
-}
-
+    return bestValue;
+}  // end of Search::Worker::search
 
 // Main search function for both PV and non-PV nodes
 template<NodeType nodeType>
