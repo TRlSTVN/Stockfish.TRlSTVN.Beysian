@@ -2278,109 +2278,118 @@ moves_loop:  // When in check, search starts here// Step 12. A small ProbCut ide
 
                 // If the move is worse than some previously searched move,
                 // remember it, to update its stats later.
-                if (move != bestMove && moveCount <= SEARCHEDLIST_CAPACITY)
+                if (move != bestMove)
                 {
                     if (capture)
-                        capturesSearched.push_back(move);
+                    {
+                        if (capturesSearched.size() < 32)
+                            capturesSearched.push_back(move);
+                    }
                     else
-                        quietsSearched.push_back(move);
+                    {
+                        if (quietsSearched.size() < 32)
+                            quietsSearched.push_back(move);
+                    }
                 }
+
+                // Step 21. Check for mate and stalemate
+                // All legal moves have been searched and if there are no legal moves, it
+                // must be a mate or a stalemate. If we are in a singular extension search then
+                // return a fail low score.
+
+                assert(moveCount || !ss->inCheck || excludedMove || !MoveList<LEGAL>(pos).size());
+
+                // Adjust best value for fail high cases
+                if (bestValue >= beta && !is_decisive(bestValue) && !is_decisive(alpha))
+                    bestValue = (bestValue * depth + beta) / (depth + 1);
+
+                if (!moveCount)
+                    bestValue = excludedMove ? alpha : ss->inCheck ? mated_in(ss->ply) : VALUE_DRAW;
+
+                // If there is a move that produces search value greater than alpha,
+                // we update the stats of searched moves.
+                else if (bestMove)
+                {
+                    update_all_stats(pos, ss, *this, bestMove, prevSq, quietsSearched,
+                                     capturesSearched, depth, ttData.move);
+                    if (!PvNode)
+                        ttMoveHistory << (bestMove == ttData.move ? 809 : -865);
+                }
+
+                // Bonus for prior quiet countermove that caused the fail low
+                else if (!priorCapture && prevSq != SQ_NONE)
+                {
+                    int bonusScale = -228;
+                    bonusScale -= (ss - 1)->statScore / 104;
+                    bonusScale += std::min(63 * depth, 508);
+                    bonusScale += 184 * ((ss - 1)->moveCount > 8);
+                    bonusScale += 143 * (!ss->inCheck && bestValue <= ss->staticEval - 92);
+                    bonusScale +=
+                      149 * (!(ss - 1)->inCheck && bestValue <= -(ss - 1)->staticEval - 70);
+
+                    bonusScale = std::max(bonusScale, 0);
+
+                    const int scaledBonus = std::min(144 * depth - 92, 1365) * bonusScale;
+
+                    update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq,
+                                                  scaledBonus * 400 / 32768);
+
+                    mainHistory[~us][((ss - 1)->currentMove).from_to()]
+                      << scaledBonus * 220 / 32768;
+
+                    if (type_of(pos.piece_on(prevSq)) != PAWN
+                        && ((ss - 1)->currentMove).type_of() != PROMOTION)
+                        pawnHistory[pawn_history_index(pos)][pos.piece_on(prevSq)][prevSq]
+                          << scaledBonus * 1164 / 32768;
+                }
+
+                // Bonus for prior capture countermove that caused the fail low
+                else if (priorCapture && prevSq != SQ_NONE)
+                {
+                    Piece capturedPiece = pos.captured_piece();
+                    assert(capturedPiece != NO_PIECE);
+                    captureHistory[pos.piece_on(prevSq)][prevSq][type_of(capturedPiece)] << 964;
+                }
+
+                if (PvNode)
+                    bestValue = std::min(bestValue, maxValue);
+
+                // If no good move is found and the previous position was ttPv, then the previous
+                // opponent move is probably good and the new position is added to the search tree.
+                if (bestValue <= alpha)
+                    ss->ttPv = ss->ttPv || (ss - 1)->ttPv;
+
+                // Write gathered information in transposition table. Note that the
+                // static evaluation is saved as it was before correction history.
+                if (!excludedMove && !(rootNode && pvIdx))
+                    ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), ss->ttPv,
+                                   bestValue >= beta    ? BOUND_LOWER
+                                   : PvNode && bestMove ? BOUND_EXACT
+                                                        : BOUND_UPPER,
+                                   moveCount != 0 ? depth : std::min(MAX_PLY - 1, depth + 6),
+                                   bestMove, unadjustedStaticEval, tt.generation());
+
+                // Adjust correction history  (restore master behavior exactly)
+                if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
+                    && ((bestValue < ss->staticEval
+                         && bestValue < beta)  // negative correction & no fail high
+                        || (bestValue > ss->staticEval
+                            && bestMove)))  // positive correction & no fail low
+                {
+                    auto bonus = std::clamp(
+                      int(bestValue - ss->staticEval) * depth / (8 + (bestValue > ss->staticEval)),
+                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
+                    update_correction_history(
+                      pos, ss, *this, (1088 - 180 * (bestValue > ss->staticEval)) * bonus / 1024);
+                }
+
+                assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
+
+                return bestValue;
             }
-
-            // Step 21. Check for mate and stalemate
-            // All legal moves have been searched and if there are no legal moves, it
-            // must be a mate or a stalemate. If we are in a singular extension search then
-            // return a fail low score.
-
-            assert(moveCount || !ss->inCheck || excludedMove || !MoveList<LEGAL>(pos).size());
-
-            // Adjust best value for fail high cases
-            if (bestValue >= beta && !is_decisive(bestValue) && !is_decisive(alpha))
-                bestValue = (bestValue * depth + beta) / (depth + 1);
-
-            if (!moveCount)
-                bestValue = excludedMove ? alpha : ss->inCheck ? mated_in(ss->ply) : VALUE_DRAW;
-
-            // If there is a move that produces search value greater than alpha,
-            // we update the stats of searched moves.
-            else if (bestMove)
-            {
-                update_all_stats(pos, ss, *this, bestMove, prevSq, quietsSearched, capturesSearched,
-                                 depth, ttData.move);
-                if (!PvNode)
-                    ttMoveHistory << (bestMove == ttData.move ? 809 : -865);
-            }
-
-            // Bonus for prior quiet countermove that caused the fail low
-            else if (!priorCapture && prevSq != SQ_NONE)
-            {
-                int bonusScale = -228;
-                bonusScale -= (ss - 1)->statScore / 104;
-                bonusScale += std::min(63 * depth, 508);
-                bonusScale += 184 * ((ss - 1)->moveCount > 8);
-                bonusScale += 143 * (!ss->inCheck && bestValue <= ss->staticEval - 92);
-                bonusScale += 149 * (!(ss - 1)->inCheck && bestValue <= -(ss - 1)->staticEval - 70);
-
-                bonusScale = std::max(bonusScale, 0);
-
-                const int scaledBonus = std::min(144 * depth - 92, 1365) * bonusScale;
-
-                update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq,
-                                              scaledBonus * 400 / 32768);
-
-                mainHistory[~us][((ss - 1)->currentMove).from_to()] << scaledBonus * 220 / 32768;
-
-                if (type_of(pos.piece_on(prevSq)) != PAWN
-                    && ((ss - 1)->currentMove).type_of() != PROMOTION)
-                    pawnHistory[pawn_history_index(pos)][pos.piece_on(prevSq)][prevSq]
-                      << scaledBonus * 1164 / 32768;
-            }
-
-            // Bonus for prior capture countermove that caused the fail low
-            else if (priorCapture && prevSq != SQ_NONE)
-            {
-                Piece capturedPiece = pos.captured_piece();
-                assert(capturedPiece != NO_PIECE);
-                captureHistory[pos.piece_on(prevSq)][prevSq][type_of(capturedPiece)] << 964;
-            }
-
-            if (PvNode)
-                bestValue = std::min(bestValue, maxValue);
-
-            // If no good move is found and the previous position was ttPv, then the previous
-            // opponent move is probably good and the new position is added to the search tree.
-            if (bestValue <= alpha)
-                ss->ttPv = ss->ttPv || (ss - 1)->ttPv;
-
-            // Write gathered information in transposition table. Note that the
-            // static evaluation is saved as it was before correction history.
-            if (!excludedMove && !(rootNode && pvIdx))
-                ttWriter.write(posKey, value_to_tt(bestValue, ss->ply), ss->ttPv,
-                               bestValue >= beta    ? BOUND_LOWER
-                               : PvNode && bestMove ? BOUND_EXACT
-                                                    : BOUND_UPPER,
-                               moveCount != 0 ? depth : std::min(MAX_PLY - 1, depth + 6), bestMove,
-                               unadjustedStaticEval, tt.generation());
-
-            // Adjust correction history  (restore master behavior exactly)
-            if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
-                && ((bestValue < ss->staticEval
-                     && bestValue < beta)  // negative correction & no fail high
-                    || (bestValue > ss->staticEval
-                        && bestMove)))  // positive correction & no fail low
-            {
-                auto bonus = std::clamp(
-                  int(bestValue - ss->staticEval) * depth / (8 + (bestValue > ss->staticEval)),
-                  -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-                update_correction_history(
-                  pos, ss, *this, (1088 - 180 * (bestValue > ss->staticEval)) * bonus / 1024);
-            }
-
-            assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
 
             return bestValue;
-        }
-
+        }  // end of Search::Worker::search
 
         // Quiescence search function, which is called by the main search function with
         // depth zero, or recursively with further decreasing depth. With depth <= 0, we
