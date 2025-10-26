@@ -2773,8 +2773,6 @@ Value Search::Worker::search(
         return Eval::evaluate(networks[numaAccessToken], pos, accumulatorStack, refreshTable,
                               optimism[pos.side_to_move()]);
     }
-
-    namespace {
     // Adjusts a mate or TB score from "plies to mate from the root" to
     // "plies to mate from the current position". Standard scores are unchanged.
     // The function is called before storing a value in the transposition table.
@@ -2824,7 +2822,7 @@ Value Search::Worker::search(
 
 
     // Adds current move and appends child pv[]
-    void update_pv(Move* pv, Move move, const Move* childPv) {
+    void update_pv(Move * pv, Move move, const Move* childPv) {
 
         for (*pv++ = move; childPv && *childPv != Move::none();)
             *pv++ = *childPv++;
@@ -2833,15 +2831,9 @@ Value Search::Worker::search(
 
 
     // Updates stats at the end of search() when a bestMove is found
-    void update_all_stats(const Position& pos,
-                          Search::Stack*  ss,
-                          Search::Worker& workerThread,
-                          Move            bestMove,
-                          Square          prevSq,
-                          SearchedList&   quietsSearched,
-                          SearchedList&   capturesSearched,
-                          Depth           depth,
-                          Move            ttMove) {
+    void update_all_stats(const Position& pos, Search::Stack* ss, Search::Worker& workerThread,
+                          Move bestMove, Square prevSq, SearchedList& quietsSearched,
+                          SearchedList& capturesSearched, Depth depth, Move ttMove) {
 
         CapturePieceToHistory& captureHistory = workerThread.captureHistory;
         Piece                  movedPiece     = pos.moved_piece(bestMove);
@@ -2886,7 +2878,7 @@ Value Search::Worker::search(
 
     // Updates histories of the move pairs formed by moves
     // at ply -1, -2, -3, -4, and -6 with current move.
-    void update_continuation_histories(Search::Stack* ss, Piece pc, Square to, int bonus) {
+    void update_continuation_histories(Search::Stack * ss, Piece pc, Square to, int bonus) {
         static constexpr std::array<ConthistBonus, 6> conthist_bonuses = {
           {{1, 1157}, {2, 648}, {3, 288}, {4, 576}, {5, 140}, {6, 441}}};
 
@@ -2902,8 +2894,8 @@ Value Search::Worker::search(
 
     // Updates move sorting heuristics
 
-    void update_quiet_histories(
-      const Position& pos, Search::Stack* ss, Search::Worker& workerThread, Move move, int bonus) {
+    void update_quiet_histories(const Position& pos, Search::Stack* ss,
+                                Search::Worker& workerThread, Move move, int bonus) {
 
         Color us = pos.side_to_move();
         workerThread.mainHistory[us][move.from_to()]
@@ -2918,301 +2910,303 @@ Value Search::Worker::search(
         workerThread.pawnHistory[pIndex][pos.moved_piece(move)][move.to_sq()]
           << (bonus * (bonus > 0 ? 800 : 500) / 1024) + 70;
     }
+}
 
+// When playing with strength handicap, choose the best move among a set of
+// RootMoves using a statistical rule dependent on 'level'. Idea by Heinz van Saanen.
+Move Skill::pick_best(const RootMoves& rootMoves, size_t multiPV) {
+    static PRNG rng(now());  // PRNG sequence should be non-deterministic
+
+    // RootMoves are already sorted by score in descending order
+    Value  topScore = rootMoves[0].score;
+    int    delta    = std::min(topScore - rootMoves[multiPV - 1].score, int(PawnValue));
+    int    maxScore = -VALUE_INFINITE;
+    double weakness = 120 - 2 * level;
+
+    // Choose best move. For each move score we add two terms, both dependent on
+    // weakness. One is deterministic and bigger for weaker levels, and one is
+    // random. Then we choose the move with the resulting highest score.
+    for (size_t i = 0; i < multiPV; ++i)
+    {
+        // This is our magic formula
+        int push = int(weakness * int(topScore - rootMoves[i].score)
+                       + delta * (rng.rand<unsigned>() % int(weakness)))
+                 / 128;
+
+        if (rootMoves[i].score + push >= maxScore)
+        {
+            maxScore = rootMoves[i].score + push;
+            best     = rootMoves[i].pv[0];
+        }
     }
 
-    // When playing with strength handicap, choose the best move among a set of
-    // RootMoves using a statistical rule dependent on 'level'. Idea by Heinz van Saanen.
-    Move Skill::pick_best(const RootMoves& rootMoves, size_t multiPV) {
-        static PRNG rng(now());  // PRNG sequence should be non-deterministic
+    return best;
+}
 
-        // RootMoves are already sorted by score in descending order
-        Value  topScore = rootMoves[0].score;
-        int    delta    = std::min(topScore - rootMoves[multiPV - 1].score, int(PawnValue));
-        int    maxScore = -VALUE_INFINITE;
-        double weakness = 120 - 2 * level;
 
-        // Choose best move. For each move score we add two terms, both dependent on
-        // weakness. One is deterministic and bigger for weaker levels, and one is
-        // random. Then we choose the move with the resulting highest score.
-        for (size_t i = 0; i < multiPV; ++i)
-        {
-            // This is our magic formula
-            int push = int(weakness * int(topScore - rootMoves[i].score)
-                           + delta * (rng.rand<unsigned>() % int(weakness)))
-                     / 128;
+// Used to print debug info and, more importantly, to detect
+// when we are out of available time and thus stop the search.
+void SearchManager::check_time(Search::Worker& worker) {
+    if (--callsCnt > 0)
+        return;
 
-            if (rootMoves[i].score + push >= maxScore)
-            {
-                maxScore = rootMoves[i].score + push;
-                best     = rootMoves[i].pv[0];
-            }
-        }
+    // When using nodes, ensure checking rate is not lower than 0.1% of nodes
+    callsCnt = worker.limits.nodes ? std::min(512, int(worker.limits.nodes / 1024)) : 512;
 
-        return best;
+    static TimePoint lastInfoTime = now();
+
+    TimePoint elapsed = tm.elapsed([&worker]() { return worker.threads.nodes_searched(); });
+    TimePoint tick    = worker.limits.startTime + elapsed;
+
+    if (tick - lastInfoTime >= 1000)
+    {
+        lastInfoTime = tick;
+        dbg_print();
     }
 
+    // We should not stop pondering until told so by the GUI
+    if (ponder)
+        return;
 
-    // Used to print debug info and, more importantly, to detect
-    // when we are out of available time and thus stop the search.
-    void SearchManager::check_time(Search::Worker & worker) {
-        if (--callsCnt > 0)
-            return;
+    if (
+      // Later we rely on the fact that we can at least use the mainthread previous
+      // root-search score and PV in a multithreaded environment to prove mated-in scores.
+      worker.completedDepth >= 1
+      && ((worker.limits.use_time_management() && (elapsed > tm.maximum() || stopOnPonderhit))
+          || (worker.limits.movetime && elapsed >= worker.limits.movetime)
+          || (worker.limits.nodes && worker.threads.nodes_searched() >= worker.limits.nodes)))
+        worker.threads.stop = worker.threads.abortedSearch = true;
+}
 
-        // When using nodes, ensure checking rate is not lower than 0.1% of nodes
-        callsCnt = worker.limits.nodes ? std::min(512, int(worker.limits.nodes / 1024)) : 512;
+// Used to correct and extend PVs for moves that have a TB (but not a mate) score.
+// Keeps the search based PV for as long as it is verified to maintain the game
+// outcome, truncates afterwards. Finally, extends to mate the PV, providing a
+// possible continuation (but not a proven mating line).
+void syzygy_extend_pv(const OptionsMap&         options,
+                      const Search::LimitsType& limits,
+                      Position&                 pos,
+                      RootMove&                 rootMove,
+                      Value&                    v) {
 
-        static TimePoint lastInfoTime = now();
+    auto t_start      = std::chrono::steady_clock::now();
+    int  moveOverhead = int(options["Move Overhead"]);
+    bool rule50       = bool(options["Syzygy50MoveRule"]);
 
-        TimePoint elapsed = tm.elapsed([&worker]() { return worker.threads.nodes_searched(); });
-        TimePoint tick    = worker.limits.startTime + elapsed;
+    // Do not use more than moveOverhead / 2 time, if time management is active
+    auto time_abort = [&t_start, &moveOverhead, &limits]() -> bool {
+        auto t_end = std::chrono::steady_clock::now();
+        return limits.use_time_management()
+            && 2 * std::chrono::duration<double, std::milli>(t_end - t_start).count()
+                 > moveOverhead;
+    };
 
-        if (tick - lastInfoTime >= 1000)
+    std::list<StateInfo> sts;
+
+    // Step 0, do the rootMove, no correction allowed, as needed for MultiPV in TB.
+    auto& stRoot = sts.emplace_back();
+    pos.do_move(rootMove.pv[0], stRoot);
+    int ply = 1;
+
+    // Step 1, walk the PV to the last position in TB with correct decisive score
+    while (size_t(ply) < rootMove.pv.size())
+    {
+        Move& pvMove = rootMove.pv[ply];
+
+        RootMoves legalMoves;
+        for (const auto& m : MoveList<LEGAL>(pos))
+            legalMoves.emplace_back(m);
+
+        Tablebases::Config config = Tablebases::rank_root_moves(options, pos, legalMoves);
+        RootMove&          rm     = *std::find(legalMoves.begin(), legalMoves.end(), pvMove);
+
+        if (legalMoves[0].tbRank != rm.tbRank)
+            break;
+
+        ply++;
+
+        auto& st = sts.emplace_back();
+        pos.do_move(pvMove, st);
+
+        // Do not allow for repetitions or drawing moves along the PV in TB regime
+        if (config.rootInTB && ((rule50 && pos.is_draw(ply)) || pos.is_repetition(ply)))
         {
-            lastInfoTime = tick;
-            dbg_print();
+            pos.undo_move(pvMove);
+            ply--;
+            break;
         }
 
-        // We should not stop pondering until told so by the GUI
-        if (ponder)
-            return;
-
-        if (
-          // Later we rely on the fact that we can at least use the mainthread previous
-          // root-search score and PV in a multithreaded environment to prove mated-in scores.
-          worker.completedDepth >= 1
-          && ((worker.limits.use_time_management() && (elapsed > tm.maximum() || stopOnPonderhit))
-              || (worker.limits.movetime && elapsed >= worker.limits.movetime)
-              || (worker.limits.nodes && worker.threads.nodes_searched() >= worker.limits.nodes)))
-            worker.threads.stop = worker.threads.abortedSearch = true;
+        // Full PV shown will thus be validated and end in TB.
+        // If we cannot validate the full PV in time, we do not show it.
+        if (config.rootInTB && time_abort())
+            break;
     }
 
-    // Used to correct and extend PVs for moves that have a TB (but not a mate) score.
-    // Keeps the search based PV for as long as it is verified to maintain the game
-    // outcome, truncates afterwards. Finally, extends to mate the PV, providing a
-    // possible continuation (but not a proven mating line).
-    void syzygy_extend_pv(const OptionsMap& options, const Search::LimitsType& limits,
-                          Position& pos, RootMove& rootMove, Value& v) {
+    // Resize the PV to the correct part
+    rootMove.pv.resize(ply);
 
-        auto t_start      = std::chrono::steady_clock::now();
-        int  moveOverhead = int(options["Move Overhead"]);
-        bool rule50       = bool(options["Syzygy50MoveRule"]);
-
-        // Do not use more than moveOverhead / 2 time, if time management is active
-        auto time_abort = [&t_start, &moveOverhead, &limits]() -> bool {
-            auto t_end = std::chrono::steady_clock::now();
-            return limits.use_time_management()
-                && 2 * std::chrono::duration<double, std::milli>(t_end - t_start).count()
-                     > moveOverhead;
-        };
-
-        std::list<StateInfo> sts;
-
-        // Step 0, do the rootMove, no correction allowed, as needed for MultiPV in TB.
-        auto& stRoot = sts.emplace_back();
-        pos.do_move(rootMove.pv[0], stRoot);
-        int ply = 1;
-
-        // Step 1, walk the PV to the last position in TB with correct decisive score
-        while (size_t(ply) < rootMove.pv.size())
-        {
-            Move& pvMove = rootMove.pv[ply];
-
-            RootMoves legalMoves;
-            for (const auto& m : MoveList<LEGAL>(pos))
-                legalMoves.emplace_back(m);
-
-            Tablebases::Config config = Tablebases::rank_root_moves(options, pos, legalMoves);
-            RootMove&          rm     = *std::find(legalMoves.begin(), legalMoves.end(), pvMove);
-
-            if (legalMoves[0].tbRank != rm.tbRank)
-                break;
-
-            ply++;
-
-            auto& st = sts.emplace_back();
-            pos.do_move(pvMove, st);
-
-            // Do not allow for repetitions or drawing moves along the PV in TB regime
-            if (config.rootInTB && ((rule50 && pos.is_draw(ply)) || pos.is_repetition(ply)))
-            {
-                pos.undo_move(pvMove);
-                ply--;
-                break;
-            }
-
-            // Full PV shown will thus be validated and end in TB.
-            // If we cannot validate the full PV in time, we do not show it.
-            if (config.rootInTB && time_abort())
-                break;
-        }
-
-        // Resize the PV to the correct part
-        rootMove.pv.resize(ply);
-
-        // Step 2, now extend the PV to mate, as if the user explored syzygy-tables.info
-        // using top ranked moves (minimal DTZ), which gives optimal mates only for simple
-        // endgames e.g. KRvK.
-        while (!(rule50 && pos.is_draw(0)))
-        {
-            if (time_abort())
-                break;
-
-            RootMoves legalMoves;
-            for (const auto& m : MoveList<LEGAL>(pos))
-            {
-                auto&     rm = legalMoves.emplace_back(m);
-                StateInfo tmpSI;
-                pos.do_move(m, tmpSI);
-                // Give a score of each move to break DTZ ties restricting opponent mobility,
-                // but not giving the opponent a capture.
-                for (const auto& mOpp : MoveList<LEGAL>(pos))
-                    rm.tbRank -= pos.capture(mOpp) ? 100 : 1;
-                pos.undo_move(m);
-            }
-
-            // Mate found
-            if (legalMoves.size() == 0)
-                break;
-
-            // Sort moves according to their above assigned rank.
-            // This will break ties for moves with equal DTZ in rank_root_moves.
-            std::stable_sort(legalMoves.begin(), legalMoves.end(),
-                             [](const Search::RootMove& a, const Search::RootMove& b) {
-                                 return a.tbRank > b.tbRank;
-                             });
-
-            // The winning side tries to minimize DTZ, the losing side maximizes it
-            Tablebases::Config config = Tablebases::rank_root_moves(options, pos, legalMoves, true);
-
-            // If DTZ is not available we might not find a mate, so we bail out
-            if (!config.rootInTB || config.cardinality > 0)
-                break;
-
-            ply++;
-
-            Move& pvMove = legalMoves[0].pv[0];
-            rootMove.pv.push_back(pvMove);
-            auto& st = sts.emplace_back();
-            pos.do_move(pvMove, st);
-        }
-
-        // Finding a draw in this function is an exceptional case, that cannot happen when rule50 is false or
-        // during engine game play, since we have a winning score, and play correctly
-        // with TB support. However, it can be that a position is draw due to the 50 move
-        // rule if it has been been reached on the board with a non-optimal 50 move counter
-        // (e.g. 8/8/6k1/3B4/3K4/4N3/8/8 w - - 54 106 ) which TB with dtz counter rounding
-        // cannot always correctly rank. See also
-        // https://github.com/official-stockfish/Stockfish/issues/5175#issuecomment-2058893495
-        // We adjust the score to match the found PV. Note that a TB loss score can be
-        // displayed if the engine did not find a drawing move yet, but eventually search
-        // will figure it out (e.g. 1kq5/q2r4/5K2/8/8/8/8/7Q w - - 96 1 )
-        if (pos.is_draw(0))
-            v = VALUE_DRAW;
-
-        // Undo the PV moves
-        for (auto it = rootMove.pv.rbegin(); it != rootMove.pv.rend(); ++it)
-            pos.undo_move(*it);
-
-        // Inform if we couldn't get a full extension in time
+    // Step 2, now extend the PV to mate, as if the user explored syzygy-tables.info
+    // using top ranked moves (minimal DTZ), which gives optimal mates only for simple
+    // endgames e.g. KRvK.
+    while (!(rule50 && pos.is_draw(0)))
+    {
         if (time_abort())
-            sync_cout
-              << "info string Syzygy based PV extension requires more time, increase Move Overhead as needed."
-              << sync_endl;
-    }
+            break;
 
-    void SearchManager::pv(Search::Worker & worker, const ThreadPool& threads,
-                           const TranspositionTable& tt, Depth depth) {
-
-        const auto nodes     = threads.nodes_searched();
-        auto&      rootMoves = worker.rootMoves;
-        auto&      pos       = worker.rootPos;
-        size_t     pvIdx     = worker.pvIdx;
-        size_t     multiPV   = std::min(size_t(worker.options["MultiPV"]), rootMoves.size());
-        uint64_t   tbHits = threads.tb_hits() + (worker.tbConfig.rootInTB ? rootMoves.size() : 0);
-
-        for (size_t i = 0; i < multiPV; ++i)
+        RootMoves legalMoves;
+        for (const auto& m : MoveList<LEGAL>(pos))
         {
-            bool updated = rootMoves[i].score != -VALUE_INFINITE;
-
-            if (depth == 1 && !updated && i > 0)
-                continue;
-
-            Depth d = updated ? depth : std::max(1, depth - 1);
-            Value v = updated ? rootMoves[i].uciScore : rootMoves[i].previousScore;
-
-            if (v == -VALUE_INFINITE)
-                v = VALUE_ZERO;
-
-            bool tb = worker.tbConfig.rootInTB && std::abs(v) <= VALUE_TB;
-            v       = tb ? rootMoves[i].tbScore : v;
-
-            bool isExact =
-              i != pvIdx || tb || !updated;  // tablebase- and previous-scores are exact
-
-            // Potentially correct and extend the PV, and in exceptional cases v
-            if (is_decisive(v) && std::abs(v) < VALUE_MATE_IN_MAX_PLY
-                && ((!rootMoves[i].scoreLowerbound && !rootMoves[i].scoreUpperbound) || isExact))
-                syzygy_extend_pv(worker.options, worker.limits, pos, rootMoves[i], v);
-
-            std::string pv;
-            for (Move m : rootMoves[i].pv)
-                pv += UCIEngine::move(m, pos.is_chess960()) + " ";
-
-            // Remove last whitespace
-            if (!pv.empty())
-                pv.pop_back();
-
-            auto wdl   = worker.options["UCI_ShowWDL"] ? UCIEngine::wdl(v, pos) : "";
-            auto bound = rootMoves[i].scoreLowerbound
-                         ? "lowerbound"
-                         : (rootMoves[i].scoreUpperbound ? "upperbound" : "");
-
-            InfoFull info;
-
-            info.depth    = d;
-            info.selDepth = rootMoves[i].selDepth;
-            info.multiPV  = i + 1;
-            info.score    = {v, pos};
-            info.wdl      = wdl;
-
-            if (!isExact)
-                info.bound = bound;
-
-            TimePoint time = std::max(TimePoint(1), tm.elapsed_time());
-            info.timeMs    = time;
-            info.nodes     = nodes;
-            info.nps       = nodes * 1000 / time;
-            info.tbHits    = tbHits;
-            info.pv        = pv;
-            info.hashfull  = tt.hashfull();
-
-            updates.onUpdateFull(info);
-        }
-    }
-
-    // Called in case we have no ponder move before exiting the search,
-    // for instance, in case we stop the search during a fail high at root.
-    // We try hard to have a ponder move to return to the GUI,
-    // otherwise in case of 'ponder on' we have nothing to think about.
-    bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& pos) {
-
-        StateInfo st;
-
-        assert(pv.size() == 1);
-        if (pv[0] == Move::none())
-            return false;
-
-        pos.do_move(pv[0], st, &tt);
-
-        auto [ttHit, ttData, ttWriter] = tt.probe(pos.key());
-        if (ttHit)
-        {
-            if (MoveList<LEGAL>(pos).contains(ttData.move))
-                pv.push_back(ttData.move);
+            auto&     rm = legalMoves.emplace_back(m);
+            StateInfo tmpSI;
+            pos.do_move(m, tmpSI);
+            // Give a score of each move to break DTZ ties restricting opponent mobility,
+            // but not giving the opponent a capture.
+            for (const auto& mOpp : MoveList<LEGAL>(pos))
+                rm.tbRank -= pos.capture(mOpp) ? 100 : 1;
+            pos.undo_move(m);
         }
 
-        pos.undo_move(pv[0]);
-        return pv.size() > 1;
+        // Mate found
+        if (legalMoves.size() == 0)
+            break;
+
+        // Sort moves according to their above assigned rank.
+        // This will break ties for moves with equal DTZ in rank_root_moves.
+        std::stable_sort(
+          legalMoves.begin(), legalMoves.end(),
+          [](const Search::RootMove& a, const Search::RootMove& b) { return a.tbRank > b.tbRank; });
+
+        // The winning side tries to minimize DTZ, the losing side maximizes it
+        Tablebases::Config config = Tablebases::rank_root_moves(options, pos, legalMoves, true);
+
+        // If DTZ is not available we might not find a mate, so we bail out
+        if (!config.rootInTB || config.cardinality > 0)
+            break;
+
+        ply++;
+
+        Move& pvMove = legalMoves[0].pv[0];
+        rootMove.pv.push_back(pvMove);
+        auto& st = sts.emplace_back();
+        pos.do_move(pvMove, st);
     }
+
+    // Finding a draw in this function is an exceptional case, that cannot happen when rule50 is false or
+    // during engine game play, since we have a winning score, and play correctly
+    // with TB support. However, it can be that a position is draw due to the 50 move
+    // rule if it has been been reached on the board with a non-optimal 50 move counter
+    // (e.g. 8/8/6k1/3B4/3K4/4N3/8/8 w - - 54 106 ) which TB with dtz counter rounding
+    // cannot always correctly rank. See also
+    // https://github.com/official-stockfish/Stockfish/issues/5175#issuecomment-2058893495
+    // We adjust the score to match the found PV. Note that a TB loss score can be
+    // displayed if the engine did not find a drawing move yet, but eventually search
+    // will figure it out (e.g. 1kq5/q2r4/5K2/8/8/8/8/7Q w - - 96 1 )
+    if (pos.is_draw(0))
+        v = VALUE_DRAW;
+
+    // Undo the PV moves
+    for (auto it = rootMove.pv.rbegin(); it != rootMove.pv.rend(); ++it)
+        pos.undo_move(*it);
+
+    // Inform if we couldn't get a full extension in time
+    if (time_abort())
+        sync_cout
+          << "info string Syzygy based PV extension requires more time, increase Move Overhead as needed."
+          << sync_endl;
+}
+
+void SearchManager::pv(Search::Worker&           worker,
+                       const ThreadPool&         threads,
+                       const TranspositionTable& tt,
+                       Depth                     depth) {
+
+    const auto nodes     = threads.nodes_searched();
+    auto&      rootMoves = worker.rootMoves;
+    auto&      pos       = worker.rootPos;
+    size_t     pvIdx     = worker.pvIdx;
+    size_t     multiPV   = std::min(size_t(worker.options["MultiPV"]), rootMoves.size());
+    uint64_t   tbHits    = threads.tb_hits() + (worker.tbConfig.rootInTB ? rootMoves.size() : 0);
+
+    for (size_t i = 0; i < multiPV; ++i)
+    {
+        bool updated = rootMoves[i].score != -VALUE_INFINITE;
+
+        if (depth == 1 && !updated && i > 0)
+            continue;
+
+        Depth d = updated ? depth : std::max(1, depth - 1);
+        Value v = updated ? rootMoves[i].uciScore : rootMoves[i].previousScore;
+
+        if (v == -VALUE_INFINITE)
+            v = VALUE_ZERO;
+
+        bool tb = worker.tbConfig.rootInTB && std::abs(v) <= VALUE_TB;
+        v       = tb ? rootMoves[i].tbScore : v;
+
+        bool isExact = i != pvIdx || tb || !updated;  // tablebase- and previous-scores are exact
+
+        // Potentially correct and extend the PV, and in exceptional cases v
+        if (is_decisive(v) && std::abs(v) < VALUE_MATE_IN_MAX_PLY
+            && ((!rootMoves[i].scoreLowerbound && !rootMoves[i].scoreUpperbound) || isExact))
+            syzygy_extend_pv(worker.options, worker.limits, pos, rootMoves[i], v);
+
+        std::string pv;
+        for (Move m : rootMoves[i].pv)
+            pv += UCIEngine::move(m, pos.is_chess960()) + " ";
+
+        // Remove last whitespace
+        if (!pv.empty())
+            pv.pop_back();
+
+        auto wdl   = worker.options["UCI_ShowWDL"] ? UCIEngine::wdl(v, pos) : "";
+        auto bound = rootMoves[i].scoreLowerbound
+                     ? "lowerbound"
+                     : (rootMoves[i].scoreUpperbound ? "upperbound" : "");
+
+        InfoFull info;
+
+        info.depth    = d;
+        info.selDepth = rootMoves[i].selDepth;
+        info.multiPV  = i + 1;
+        info.score    = {v, pos};
+        info.wdl      = wdl;
+
+        if (!isExact)
+            info.bound = bound;
+
+        TimePoint time = std::max(TimePoint(1), tm.elapsed_time());
+        info.timeMs    = time;
+        info.nodes     = nodes;
+        info.nps       = nodes * 1000 / time;
+        info.tbHits    = tbHits;
+        info.pv        = pv;
+        info.hashfull  = tt.hashfull();
+
+        updates.onUpdateFull(info);
+    }
+}
+
+// Called in case we have no ponder move before exiting the search,
+// for instance, in case we stop the search during a fail high at root.
+// We try hard to have a ponder move to return to the GUI,
+// otherwise in case of 'ponder on' we have nothing to think about.
+bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& pos) {
+
+    StateInfo st;
+
+    assert(pv.size() == 1);
+    if (pv[0] == Move::none())
+        return false;
+
+    pos.do_move(pv[0], st, &tt);
+
+    auto [ttHit, ttData, ttWriter] = tt.probe(pos.key());
+    if (ttHit)
+    {
+        if (MoveList<LEGAL>(pos).contains(ttData.move))
+            pv.push_back(ttData.move);
+    }
+
+    pos.undo_move(pv[0]);
+    return pv.size() > 1;
+}
 }  // namespace Stockfish
